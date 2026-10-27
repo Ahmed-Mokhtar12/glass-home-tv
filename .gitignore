@@ -1,0 +1,20 @@
+# Signing key: made by build.ps1 on first build. Never share it.
+glasshome/keystore/
+glasshome/out/
+
+# Downloaded tools, logs, TV backups
+tools/
+downloads/
+logs/
+backup/
+
+# Your photos
+Family pictures/
+*.jpg
+*.jpeg
+*.heic
+*.png
+!glasshome/res/**/*.png
+
+# Notes with your own network details
+*.local.md
