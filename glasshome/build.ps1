@@ -33,7 +33,7 @@ $pw = Get-Content $pwFile -Raw
 # Resources and manifest
 Run "$bt\aapt2.exe" @('compile', '--dir', "$here\res", '-o', "$out\res.zip")
 Run "$bt\aapt2.exe" @('link', '-o', "$out\base.apk", '-I', $jar, '--manifest', "$here\AndroidManifest.xml",
-    '--min-sdk-version', '29', '--target-sdk-version', '29', '--version-code', '16', '--version-name', '2.5',
+    '--min-sdk-version', '29', '--target-sdk-version', '29', '--version-code', '17', '--version-name', '2.6',
     '--java', "$out\gen", "$out\res.zip")
 
 # Java -> classes -> dex

@@ -59,7 +59,14 @@ final class Talk {
     Talk(HomeButtonService svc, SharedPreferences prefs) { this.svc = svc; this.prefs = prefs; }
 
     /** One turn. dry: decide but don't press, remember or show anything (for tests). fakeAi: the AI's answer to use instead of OpenRouter (tests). */
-    JSONObject handle(String words, boolean dry, String fakeAi) throws JSONException {
+    JSONObject handle(String words, boolean dry, String fakeAi) throws JSONException { return handle(words, dry, fakeAi, null, null); }
+
+    /**
+     * testModel / testPool: for dry-run model comparisons only (VoiceServer accepts them only with X-Dry-Run):
+     * a model to ask directly instead of Jev, or a Jev allowed-models list to try. The saved settings are not changed.
+     */
+    JSONObject handle(String words, boolean dry, String fakeAi, String testModel, String testPool) throws JSONException {
+        if (!dry) { testModel = null; testPool = null; }
         final long start = SystemClock.elapsedRealtime(), deadline = start + BUDGET_MS;
         words = words == null ? "" : words.trim();
         boolean debug = prefs.getBoolean(VoiceServer.KEY_DEBUG, false);
@@ -95,7 +102,8 @@ final class Talk {
             boolean tvOn = ((PowerManager) svc.getSystemService(android.content.Context.POWER_SERVICE)).isInteractive();
             FastPath.Step fast = FastPath.decide(words, playerInFront(), tvOn);
             final List<JSONObject> ok = new ArrayList<>();
-            String say, model = "";
+            String say, model = "", cost = "";
+            boolean pictureSent = false;
             boolean aiFarewell = false, checkScreen = false;
             if (fast != null) {
                 if (!dry) svc.banner(HomeButtonService.HEARD, "“" + words + "”");
@@ -108,6 +116,7 @@ final class Talk {
                     if (tvOn && ScreenPolicy.wantsPicture(mode, appBefore, clsBefore, words)) {
                         if (!dry) svc.clearBanner(Math.min(500, left(deadline) - 4000));   // the old banner mustn't cover the picture
                         jpeg = ScreenCapture.jpegBase64(Math.min(1500, left(deadline) - 3000));
+                        pictureSent = jpeg != null;
                         log.stage(id, jpeg != null ? "picture" : "no_picture", SystemClock.elapsedRealtime());
                         if (jpeg == null && FastPath.needsScreen(words)) {
                             if (!dry) record(words, "", "failed", appBefore);
@@ -119,7 +128,7 @@ final class Talk {
                 String content;
                 try {
                     if (fakeAi != null) content = fakeAi;
-                    else { String[] answer = askAi(words, jpeg, deadline, id); content = answer[0]; model = answer[1]; }
+                    else { String[] answer = askAi(words, jpeg, deadline, id, testModel, testPool); content = answer[0]; model = answer[1]; cost = answer[2]; }
                 } catch (IOException e) {
                     if (cancelRequested) return reply(id, news, "OK, I stopped.", false, "done", words);
                     Log.w(TAG, "AI: " + e.getMessage());
@@ -129,7 +138,7 @@ final class Talk {
                 log.stage(id, "model", SystemClock.elapsedRealtime());
                 if (!model.isEmpty()) log.note(id, "model", model);
                 if (cancelRequested) return reply(id, news, "OK, I stopped.", false, "done", words);
-                if (!ModelPool.allowed(model, pool())) {
+                if (testModel == null && !ModelPool.allowed(model, testPool != null ? ModelPool.parse(testPool) : pool())) {
                     // Jev answered from a model outside the list you chose: don't act on it
                     log.note(id, "outside_pool", "yes");
                     if (!dry) svc.banner(HomeButtonService.NOT_SURE, "Please say that again");
@@ -180,7 +189,9 @@ final class Talk {
             if (dry) {
                 JSONArray planned = new JSONArray();
                 for (JSONObject s : ok) planned.put(s);
-                JSONObject r = reply(id, "", say, end, "dry", words).put("actions", planned).put("fast", fast != null);
+                JSONObject r = reply(id, "", say, end, "dry", words).put("actions", planned).put("fast", fast != null)
+                    .put("ms", SystemClock.elapsedRealtime() - start).put("picture", pictureSent);
+                if (!cost.isEmpty()) r.put("cost", cost);
                 if (!model.isEmpty()) r.put("model", model);
                 return r;
             }
@@ -400,11 +411,13 @@ final class Talk {
     }
 
     /** The chat request for OpenRouter. The prompt lives on the TV so it can be improved later. */
-    JSONObject aiRequest(String words, String picture, boolean schema) throws JSONException {
+    JSONObject aiRequest(String words, String picture, boolean schema) throws JSONException { return aiRequest(words, picture, schema, null, null); }
+
+    private JSONObject aiRequest(String words, String picture, boolean schema, String testModel, String testPool) throws JSONException {
         String vision = prefs.getString(VoiceServer.KEY_VISION_MODEL, "").trim();
-        String model = prefs.getString(VoiceServer.KEY_MODEL, VoiceServer.DEFAULT_MODEL);
+        String model = testModel != null ? testModel : prefs.getString(VoiceServer.KEY_MODEL, VoiceServer.DEFAULT_MODEL);
         // Jev reads pictures itself (within its allowed models), so the picture model only replaces another main model
-        if (picture != null && !vision.isEmpty() && !model.equals(VoiceServer.DEFAULT_MODEL)) model = vision;
+        if (testModel == null && picture != null && !vision.isEmpty() && !model.equals(VoiceServer.DEFAULT_MODEL)) model = vision;
         JSONObject r = new JSONObject();
         r.put("model", model);
         r.put("max_tokens", 500);
@@ -435,10 +448,11 @@ final class Talk {
         r.put("messages", messages);
         if (model.equals(VoiceServer.DEFAULT_MODEL)) {
             JSONObject jev = new JSONObject().put("id", "jev-router").put("cost_tier", "low");
-            List<String> pool = pool();
+            List<String> pool = testPool != null ? ModelPool.parse(testPool) : pool();
             if (!pool.isEmpty()) jev.put("allowed_models", new JSONArray(pool));
             r.put("plugins", new JSONArray().put(jev));
         }
+        r.put("usage", new JSONObject().put("include", true));   // OpenRouter then reports the cost of this call
         if (schema) r.put("response_format", schema());
         return r;
     }
@@ -474,14 +488,14 @@ final class Talk {
     }
 
     /** {content, served model}. Retries once without the answer schema if the AI service refuses it, time allowing. */
-    private String[] askAi(String words, String picture, long deadline, String id) throws IOException, JSONException {
+    private String[] askAi(String words, String picture, long deadline, String id, String testModel, String testPool) throws IOException, JSONException {
         String key = SecretStore.get(prefs, KEY_AI);
         if (key.isEmpty()) throw new IOException("I need the AI key first. Add it on the TV's Voice control screen");
         try {
-            return callAi(key, aiRequest(words, picture, true), deadline, id);
+            return callAi(key, aiRequest(words, picture, true, testModel, testPool), deadline, id);
         } catch (SchemaRefused e) {
             log.note(id, "schema", "refused");
-            return callAi(key, aiRequest(words, picture, false), deadline, id);
+            return callAi(key, aiRequest(words, picture, false, testModel, testPool), deadline, id);
         }
     }
 
@@ -568,7 +582,10 @@ final class Talk {
             if (status >= 400) throw new IOException("I can't reach the AI right now. Simple things like volume and pause still work");
             JSONObject r = new JSONObject(body);
             String content = r.getJSONArray("choices").getJSONObject(0).getJSONObject("message").optString("content", "");
-            return new String[] { content, r.optString("model", "") };
+            JSONObject usage = r.optJSONObject("usage");
+            String cost = usage != null && usage.has("cost") ? String.valueOf(usage.optDouble("cost")) : "";
+            if (!cost.isEmpty()) log.note(id, "cost", cost);
+            return new String[] { content, r.optString("model", ""), cost };
         } catch (java.net.SocketTimeoutException e) {
             throw new IOException("The AI took too long. Please try again");
         } catch (java.net.UnknownHostException e) {

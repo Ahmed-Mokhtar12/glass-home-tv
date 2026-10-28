@@ -118,6 +118,7 @@ final class VoiceServer {
             boolean chunked = false;
             String token = "";
             boolean dry = false;
+            String testModel = null, testPool = null;   // dry-run model comparisons only
             for (String h; (h = line(in)) != null && !h.isEmpty(); ) {
                 int colon = h.indexOf(':');
                 if (colon < 0) continue;
@@ -125,6 +126,8 @@ final class VoiceServer {
                 if (name.equals("content-length")) length = Integer.parseInt(value);
                 if (name.equals("x-token")) token = value;
                 if (name.equals("x-dry-run")) dry = value.equals("1");
+                if (name.equals("x-test-model")) testModel = value;
+                if (name.equals("x-test-pool")) testPool = value;
                 if (name.equals("transfer-encoding") && value.toLowerCase(Locale.ROOT).contains("chunked")) chunked = true;
             }
             if (length < 0 || length > 64 * 1024) { reply(c, 413, "text/plain", "Too big"); return; }
@@ -143,7 +146,8 @@ final class VoiceServer {
             if (!sameSecret(token, prefs.getString(KEY_TOKEN, ""))) { refuse(c, talkPath, 401, "Wrong code. Copy the code from the TV's Voice control screen into the Shortcut."); return; }
             // dry-run tests press nothing, so they don't count towards the limit
             if (!dry && tooMany()) { refuse(c, talkPath, 429, "Too many requests. Please wait a minute."); return; }
-            route(c, method, path, text, dry);
+            if (!dry) { testModel = null; testPool = null; }
+            route(c, method, path, text, dry, testModel, testPool);
         } catch (Exception e) {
             Log.w(TAG, "request", e);
             try { refuse(c, talking, 500, talking ? "Sorry, something went wrong on the TV. Please try again." : "Error: " + e.getMessage()); }
@@ -153,7 +157,8 @@ final class VoiceServer {
         }
     }
 
-    private void route(Socket c, String method, String path, String body, boolean dry) throws IOException, JSONException {
+    private void route(Socket c, String method, String path, String body, boolean dry, String testModel, String testPool)
+            throws IOException, JSONException {
         if (method.equals("POST") && path.equals("/talk")) {
             String words = body, fake = null;
             if (body.trim().startsWith("{")) {   // tests: {"words": ..., "fake": the AI answer to use instead of OpenRouter}
@@ -161,7 +166,7 @@ final class VoiceServer {
                 words = t.optString("words");
                 fake = t.has("fake") ? t.optString("fake") : null;
             }
-            reply(c, 200, "application/json; charset=utf-8", talk.handle(words, dry, fake).toString());
+            reply(c, 200, "application/json; charset=utf-8", talk.handle(words, dry, fake, testModel, testPool).toString());
         } else if (method.equals("GET") && path.equals("/actions")) {
             reply(c, 200, "application/json", Actions.listJson().toString(2));
         } else if (method.equals("GET") && path.equals("/ping")) {
