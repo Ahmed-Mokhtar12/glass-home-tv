@@ -60,6 +60,43 @@ iPhone                                  TV (Glass Home app)
 - **A small banner** at the top of the TV shows what it heard and what happened.
 - **Glass Home** replaces the Home button through an accessibility service. Turning that service off brings the original launcher back.
 
+## What you can say (version 2.5, tested on the TV)
+
+**Watching and browsing YouTube:**
+- **Play something:** "play Amr Diab songs", "play relaxing piano music". The TV searches, a picture of the results goes to the AI, and it picks the first real video. **Sponsored** results are skipped.
+- **Sections:** "YouTube home", "open Shorts", "go to my subscriptions", "show the music section", "YouTube news", "open my library". You can also ask for Gaming, Podcasts and Sport.
+  - YouTube has no link to these sections, so the TV opens YouTube's side menu and walks it with the arrow keys.
+  - It checks the menu is really open, using a screen picture, before it presses anything.
+- **Moving between videos:** "move to the next one", "one more to the right", "the row below", "play this one", "play the second video in the first row".
+- **While a video plays:** "next video", "previous video", "start it again", "skip the ad", "forward 30 seconds", "pause", "a bit louder".
+
+**The rest:**
+- **Lionz TV (an example IPTV app):** live channels, favourites, series, continue watching, search.
+- **Finish:** "thank you" or "that's all". A song called "Goodbye" no longer ends the conversation.
+
+**How it behaves:**
+- **The current screen comes first.** If you switch apps with the remote, "next" or "go back" applies to the app you are in now.
+- **Changed screens:** if the screen changes while the AI is thinking, the TV presses nothing. It asks you to say it again.
+- **Honest replies:** you hear either a confirmed result or what it couldn't confirm.
+- **The banner shows the state by colour:**
+
+  | Colour | Meaning |
+  |---|---|
+  | white | heard |
+  | blue | working |
+  | green | done |
+  | amber | not sure, or the screen changed |
+  | red | failed |
+
+**On the Voice control screen:**
+- **Jev models:** the models Jev may use. The default is `anthropic/claude-haiku-5.5, google/gemini-3.8-flash`. If Jev answers from another model, nothing is pressed. Empty means plain Jev.
+- **Screen pictures:** in YouTube and Lionz TV (the default), only for "this / the second one", or never. Pictures are never saved. Settings screens are never sent.
+- **Debug log:** off by default. `GET /log` (with the X-Token code) always shows timings, the model that answered and the result. It shows your words only while this is on.
+
+**Tests:**
+- `scripts\Test-Logic.ps1` runs the PC tests, with no TV needed.
+- `scripts\Test-Voice.ps1` runs dry-run tests on the TV, which press nothing.
+
 ## Quick start (by hand)
 
 1. **TV:**

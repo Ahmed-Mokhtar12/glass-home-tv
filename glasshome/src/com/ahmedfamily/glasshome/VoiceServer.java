@@ -27,30 +27,30 @@ import java.util.concurrent.Executors;
 
 /**
  * Voice control's small web server on the TV (port 8765). Your iPhone Shortcut talks to it:
- *   POST /ask    your words      -> the request your iPhone forwards to the AI (your AI key stays on the iPhone)
- *   POST /reply  the AI's answer -> the sentence Siri says; the chosen action then runs on the TV
- *   POST /do     {"action","arg","count"} -> run one action directly (for testing)
  *   POST /talk   your words      -> one whole turn on the TV (see Talk): {"say","end","status","heard"}
  *   GET  /actions                -> the allowed actions
+ *   GET  /ping                   -> "ok <app> <screen> history=<turns remembered>"
+ *   GET  /log                    -> the last 200 turns: timings, model, result (your words only with Debug log on)
+ * The old /ask, /reply and /do (the first Shortcut) are gone: everything that presses a key goes through /talk.
  * Every request must carry the code shown on the Voice control screen in an "X-Token" header.
  */
 final class VoiceServer {
     static final int PORT = 8765;
     static final String KEY_ON = "voice_on", KEY_TOKEN = "voice_token", KEY_PSK = "voice_psk", KEY_MODEL = "voice_model",
-        KEY_VISION_MODEL = "voice_vision_model";
+        KEY_VISION_MODEL = "voice_vision_model", KEY_MODEL_POOL = "voice_model_pool", KEY_PICTURE_MODE = "voice_picture_mode",
+        KEY_DEBUG = "voice_debug_log";
     static final String DEFAULT_MODEL = "typesafe/jev-router";
     private static final String TAG = "GlassVoice";
 
     private final HomeButtonService svc;
     private final SharedPreferences prefs;
     private final ExecutorService clients = Executors.newFixedThreadPool(2);
-    private final ExecutorService runner = Executors.newSingleThreadExecutor();   // one action at a time
     private final ArrayDeque<Long> recent = new ArrayDeque<>();
     private volatile ServerSocket socket;
 
     private final Talk talk;
 
-    VoiceServer(HomeButtonService svc, SharedPreferences prefs) { this.svc = svc; this.prefs = prefs; this.talk = new Talk(svc, this, prefs); }
+    VoiceServer(HomeButtonService svc, SharedPreferences prefs) { this.svc = svc; this.prefs = prefs; this.talk = new Talk(svc, prefs); }
 
     static String newToken() {
         String abc = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";   // no 0/O or 1/I, so it is easy to copy by hand
@@ -80,7 +80,6 @@ final class VoiceServer {
         stop();
         talk.shutdown();
         clients.shutdownNow();
-        runner.shutdownNow();
     }
 
     synchronized void stop() {
@@ -166,171 +165,17 @@ final class VoiceServer {
         } else if (method.equals("GET") && path.equals("/actions")) {
             reply(c, 200, "application/json", Actions.listJson().toString(2));
         } else if (method.equals("GET") && path.equals("/ping")) {
-            reply(c, 200, "text/plain", "ok " + svc.currentPackage() + " " + svc.currentClass());
-        } else if (method.equals("POST") && path.equals("/ask")) {
-            // plain text on purpose: Shortcuts then passes it on unchanged instead of turning it into a dictionary
-            pendingWords = body.trim();
-            reply(c, 200, "text/plain; charset=utf-8", aiRequest(pendingWords, true).toString());
-        } else if (method.equals("POST") && path.equals("/reply")) {
-            reply(c, 200, "text/plain; charset=utf-8", endIfDone(fromAi(body)));
-        } else if (method.equals("POST") && path.equals("/do")) {
-            JSONObject o = new JSONObject(body);
-            String err = queue(o.optString("action"), o.optString("arg"), o.optInt("count", 0));
-            reply(c, err == null ? 200 : 400, "text/plain; charset=utf-8", err == null ? "OK" : err);
+            reply(c, 200, "text/plain", "ok " + svc.currentPackage() + " " + svc.currentClass()
+                + " history=" + talk.turns.size(android.os.SystemClock.elapsedRealtime()));
+        } else if (method.equals("GET") && path.equals("/log")) {
+            reply(c, 200, "text/plain; charset=utf-8", talk.log.dump());
+        } else if (path.equals("/ask") || path.equals("/reply") || path.equals("/do")) {
+            reply(c, 410, "text/plain", "This Shortcut is out of date. Use the TV Shortcut (see SHORTCUT-TV2.md).");
         } else {
             reply(c, 404, "text/plain", "Not found");
         }
     }
 
-    // ---- AI ----
-
-    /** The last few exchanges, so "the next one" or "go back" make sense. Forgotten after 15 quiet minutes. */
-    private final ArrayDeque<String[]> history = new ArrayDeque<>();   // {your words, the AI's answer}
-    private long lastTalk;
-    private volatile String pendingWords = "";
-    private static final int HISTORY = 6;
-    private static final long FORGET_MS = 15 * 60 * 1000;
-
-    /** The chat request the iPhone sends to OpenRouter. The prompt lives on the TV so it can be improved later. */
-    JSONObject aiRequest(String words, boolean withPicture) throws JSONException {
-        String picture = withPicture ? ScreenCapture.jpegBase64() : null;
-        String vision = prefs.getString(KEY_VISION_MODEL, "").trim();
-        String model = picture != null && !vision.isEmpty() ? vision : prefs.getString(KEY_MODEL, DEFAULT_MODEL);
-        JSONObject r = new JSONObject();
-        r.put("model", model);
-        r.put("max_tokens", 500);
-        r.put("temperature", 0);
-        String screen = "Now in front: app " + svc.currentPackage() + ", screen " + svc.currentClass()
-            + (Actions.playing(svc) ? ", sound is playing." : ".")
-            + (picture != null ? " A picture of the TV screen is attached (a playing YouTube video itself shows as black)."
-                               : " No screen picture this time.");
-        JSONArray messages = new JSONArray().put(new JSONObject().put("role", "system").put("content", prompt() + "\n" + screen));
-        synchronized (history) {
-            if (System.currentTimeMillis() - lastTalk > FORGET_MS) history.clear();
-            for (String[] turn : history) {
-                messages.put(new JSONObject().put("role", "user").put("content", turn[0]));
-                messages.put(new JSONObject().put("role", "assistant").put("content", turn[1]));
-            }
-        }
-        String said = words.isEmpty() ? "(nothing was heard)" : words;
-        if (picture == null) {
-            messages.put(new JSONObject().put("role", "user").put("content", said));
-        } else {
-            messages.put(new JSONObject().put("role", "user").put("content", new JSONArray()
-                .put(new JSONObject().put("type", "text").put("text", said))
-                .put(new JSONObject().put("type", "image_url").put("image_url",
-                    new JSONObject().put("url", "data:image/jpeg;base64," + picture)))));
-        }
-        r.put("messages", messages);
-        if (model.equals(DEFAULT_MODEL)) {
-            r.put("plugins", new JSONArray().put(new JSONObject().put("id", "jev-router").put("cost_tier", "low")));
-        }
-        return r;
-    }
-
-    private String prompt() {
-        File custom = new File(svc.getFilesDir(), "assistant-prompt.txt");
-        if (custom.isFile()) {
-            try (InputStream in = new FileInputStream(custom)) { return readAll(in); } catch (IOException ignored) { }
-        }
-        return Actions.prompt();
-    }
-
-    /**
-     * The Shortcut stops when the reply contains "Goodbye". Don't leave that to the AI: when you say thank you,
-     * bye, stop or that you're done, the reply always ends with Goodbye.
-     */
-    private String endIfDone(String say) {
-        String w = " " + pendingWords.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z' ]", " ") + " ";
-        boolean done = w.contains(" thank") || w.contains(" bye ") || w.contains(" goodbye") || w.contains(" good bye")
-            || w.contains(" stop listening") || w.contains(" that's all") || w.contains(" thats all") || w.contains(" i'm done")
-            || w.contains(" im done") || w.contains(" that's it ") || w.contains(" nothing else") || w.contains(" no thanks");
-        if (done && !say.contains("Goodbye")) say = say.trim() + " Goodbye.";
-        if (done) Log.i(TAG, "conversation ended");
-        return say;
-    }
-
-    /** Reads the AI's answer, queues its actions in order and returns what Siri should say. */
-    private String fromAi(String response) {
-        String content;
-        try {
-            JSONObject r = new JSONObject(response);
-            if (r.has("error")) return "The AI service said: " + r.getJSONObject("error").optString("message", "error");
-            content = r.getJSONArray("choices").getJSONObject(0).getJSONObject("message").optString("content", "");
-        } catch (JSONException e) {
-            return "I couldn't read the AI's answer.";
-        }
-        int a = content.indexOf('{'), b = content.lastIndexOf('}');
-        if (a < 0 || b <= a) return content.isEmpty() ? "Sorry, I didn't get that." : content;
-        try {
-            JSONObject o = new JSONObject(content.substring(a, b + 1));
-            remember(content.substring(a, b + 1));
-            JSONArray steps = o.optJSONArray("actions");
-            if (steps == null) steps = new JSONArray().put(o);   // the older one-action answer
-            String say = o.optString("say", "Done.");
-            // the Shortcut ends the conversation when it hears "Goodbye"; after power off there is no TV to talk to
-            if (steps.toString().contains("\"power_off\"") && !say.contains("Goodbye")) say = say + " Goodbye.";
-            String err = queue(steps);
-            return err == null ? say : say + " But I can't do all of it: " + err;
-        } catch (JSONException e) {
-            return "Sorry, I didn't get that.";
-        }
-    }
-
-    private void remember(String answer) { remember(pendingWords, answer); }
-
-    void remember(String words, String answer) {
-        synchronized (history) {
-            if (System.currentTimeMillis() - lastTalk > FORGET_MS) history.clear();
-            history.addLast(new String[] { words.isEmpty() ? "(nothing was heard)" : words, answer });
-            while (history.size() > HISTORY) history.pollFirst();
-            lastTalk = System.currentTimeMillis();
-        }
-    }
-
-    // ---- running actions ----
-
-    private String queue(final String action, final String arg, final int count) {
-        try {
-            return queue(new JSONArray().put(new JSONObject().put("action", action).put("arg", arg).put("count", count)));
-        } catch (JSONException e) {
-            return e.getMessage();
-        }
-    }
-
-    /** Checks every step, then runs the allowed ones one after another. Returns a problem to mention, or null. */
-    private String queue(JSONArray steps) {
-        final SonyApi sony = new SonyApi(prefs.getString(KEY_PSK, ""));
-        final java.util.List<JSONObject> ok = new java.util.ArrayList<>();
-        String problem = null;
-        for (int i = 0; i < Math.min(steps.length(), 12); i++) {
-            JSONObject s = steps.optJSONObject(i);
-            if (s == null) continue;
-            String action = s.optString("action", "none"), arg = s.optString("arg", "");
-            String err = Actions.check(action, arg);
-            if (err == null && !sony.hasKey() && !action.equals("none") && !action.startsWith("youtube_") && !action.equals("open_app")) {
-                err = "type the TV's IP-control key on the Voice control screen first";
-            }
-            if (err != null) { if (problem == null) problem = err; continue; }
-            if (!action.equals("none")) ok.add(s);
-        }
-        if (ok.isEmpty()) return problem;
-        runner.execute(new Runnable() {
-            @Override public void run() {
-                Actions actions = new Actions(svc, sony);
-                for (int i = 0; i < ok.size(); i++) {
-                    JSONObject s = ok.get(i);
-                    String action = s.optString("action"), arg = s.optString("arg", "");
-                    int count = s.optInt("count", 0);
-                    Log.i(TAG, "run " + action + " '" + arg + "' " + count);
-                    try { actions.run(action, arg, count); }
-                    catch (Exception e) { Log.w(TAG, action + " failed: " + e.getMessage()); return; }
-                    if (i < ok.size() - 1) android.os.SystemClock.sleep(1500);   // let the screen settle between steps
-                }
-            }
-        });
-        return problem;
-    }
     /** At most 30 requests a minute. */
     private synchronized boolean tooMany() {
         long now = System.currentTimeMillis();

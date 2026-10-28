@@ -25,8 +25,8 @@ import java.util.Collections;
  */
 public class VoiceActivity extends Activity {
     private SharedPreferences prefs;
-    private TextView status, code, keyState, screen, aiKeyState;
-    private Button onOff;
+    private TextView status, code, keyState, screen, aiKeyState, pictureMode, debugState;
+    private Button onOff, debug;
     private float u;
 
     @Override
@@ -132,6 +132,49 @@ public class VoiceActivity extends Activity {
                 refresh();
             }
         }));
+        col.addView(space(text("Models Jev may use, separated by commas (empty = let Jev choose any):", 30, 0xCCFFFFFF), 40));
+        final EditText pool = new EditText(this);
+        pool.setSingleLine(true);
+        pool.setTextColor(Color.WHITE);
+        pool.setText(prefs.getString(VoiceServer.KEY_MODEL_POOL, ModelPool.DEFAULT));
+        col.addView(pool);
+        col.addView(button("Save Jev models", new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                prefs.edit().putString(VoiceServer.KEY_MODEL_POOL, pool.getText().toString().trim()).apply();
+                refresh();
+            }
+        }));
+        col.addView(button("Use the recommended Jev models", new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                prefs.edit().putString(VoiceServer.KEY_MODEL_POOL, ModelPool.DEFAULT).apply();
+                pool.setText(ModelPool.DEFAULT);
+                refresh();
+            }
+        }));
+
+        col.addView(space(text("Screen pictures sent to the AI with your words (never saved):", 30, 0xCCFFFFFF), 40));
+        pictureMode = text("", 28, Color.WHITE);
+        col.addView(pictureMode);
+        col.addView(button("Change", new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                String m = ScreenPolicy.normalise(prefs.getString(VoiceServer.KEY_PICTURE_MODE, ScreenPolicy.DEFAULT));
+                String nextMode = m.equals(ScreenPolicy.MEDIA_APPS) ? ScreenPolicy.KEYWORDS
+                    : m.equals(ScreenPolicy.KEYWORDS) ? ScreenPolicy.NEVER : ScreenPolicy.MEDIA_APPS;
+                prefs.edit().putString(VoiceServer.KEY_PICTURE_MODE, nextMode).apply();
+                refresh();
+            }
+        }));
+
+        debugState = text("", 28, 0xCCFFFFFF);
+        col.addView(space(debugState, 40));
+        debug = button("", new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                prefs.edit().putBoolean(VoiceServer.KEY_DEBUG, !prefs.getBoolean(VoiceServer.KEY_DEBUG, false)).apply();
+                refresh();
+            }
+        });
+        col.addView(debug);
+
         screen = text("", 28, 0xCCFFFFFF);
         col.addView(space(screen, 30));
 
@@ -156,6 +199,13 @@ public class VoiceActivity extends Activity {
         aiKeyState.setText(SecretStore.get(prefs, Talk.KEY_AI).isEmpty() ? "No AI key saved yet (needed for the new TV 2 Shortcut)."
             : "AI key saved (encrypted on the TV).");
         screen.setText(ScreenCapture.ready() ? "Screen pictures: on." : "Screen pictures: off (Voice control works without them).");
+        String m = ScreenPolicy.normalise(prefs.getString(VoiceServer.KEY_PICTURE_MODE, ScreenPolicy.DEFAULT));
+        pictureMode.setText(m.equals(ScreenPolicy.MEDIA_APPS) ? "In YouTube and Lionz TV, and when you say \"this\", \"the second one\"… (recommended)"
+            : m.equals(ScreenPolicy.KEYWORDS) ? "Only when you say \"this\", \"the second one\"… (as in version 1.9)" : "Never");
+        boolean d = prefs.getBoolean(VoiceServer.KEY_DEBUG, false);
+        debugState.setText(d ? "Debug log: ON. The TV keeps your last words in memory (not in a file) for GET /log."
+            : "Debug log: off. The TV keeps only timings and results, never your words.");
+        debug.setText(d ? "Turn debug log off" : "Turn debug log on");
     }
 
     private static String ip() {

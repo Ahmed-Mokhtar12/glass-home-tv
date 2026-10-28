@@ -34,7 +34,7 @@ final class FastPath {
         "else", "no", "ok", "okay", "great", "perfect", "cheers", "fine", "stop", "listening", "see", "later", "ya",
         "please", "siri", "tv", "mate", "buddy", "lovely", "awesome", "cool", "we're", "were", "we", "are", "and", "have", "nice", "evening", "day"));
     private static final Pattern FAREWELL_CUE = Pattern.compile(
-        " (thank|thanks|thankyou|bye|goodbye|goodnight|good night|that'?s all|that'?s it|i'?m done|i am done|we'?re done|nothing else|no thanks|stop listening|see you|finished) ");
+        " (thank|thanks|thankyou|bye|goodbye|goodnight|good night|that'?s all|that'?s it|i'?m done|i am done|we'?re done|nothing else|no thanks|stop listening|see you|finished|cheers) ");
 
     /** True when the words only say goodbye; "thanks, turn it down" or "play Goodbye" are still commands. */
     static boolean isFarewell(String words) {
@@ -42,6 +42,32 @@ final class FastPath {
         if (!FAREWELL_CUE.matcher(w).find()) return false;
         for (String t : w.trim().split(" ")) if (!t.isEmpty() && !FAREWELL.contains(t)) return false;
         return true;
+    }
+
+    /** The words contain a goodbye cue somewhere ("all done, goodbye"); not enough on its own to end. */
+    static boolean hasFarewellCue(String words) {
+        return words != null && FAREWELL_CUE.matcher(clean(words)).find();
+    }
+
+    /** The AI's presses to a video on YouTube's results: only arrows, at most 8, and exactly one OK, at the end. */
+    static boolean validPick(java.util.List<String> keys) {
+        if (keys == null || keys.isEmpty() || keys.size() > 8 || !"ok".equals(keys.get(keys.size() - 1))) return false;
+        for (int i = 0; i < keys.size() - 1; i++) {
+            String k = keys.get(i);
+            if (!k.equals("up") && !k.equals("down") && !k.equals("left") && !k.equals("right")) return false;
+        }
+        return true;
+    }
+
+    private static final Pattern GOODBYE_WORD = Pattern.compile("(?i)good[\\s-]?bye");
+
+    /**
+     * The Shortcut ends when the reply contains "Goodbye", so only an ending reply may say it:
+     * "Playing Goodbye by Mariah Carey" becomes "Playing Good-bye by Mariah Carey" (Siri says it the same).
+     */
+    static String guardGoodbye(String say, boolean end) {
+        if (end || say == null) return say;
+        return GOODBYE_WORD.matcher(say).replaceAll("good-bye");
     }
 
     private static final Pattern NUMBER = Pattern.compile(" (\\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty|forty five|fifty|sixty|ninety) (second|seconds|sec|secs|minute|minutes|min|mins) ");

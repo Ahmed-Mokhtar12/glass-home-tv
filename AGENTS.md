@@ -98,7 +98,11 @@ Ask the person, or check once ADB works:
    - The Lionz TV, Shahid and TV Bro entries in `Actions.java` are examples measured on one TV.
    - If the person doesn't have those apps, remove them from `LIST`/`APPS` and from the prompt, and remove their cases from `scripts/Test-Voice.ps1`. Then rebuild.
    - For another app, measure its key routes on screen first. Don't guess.
-5. **Check (presses nothing):** `.\scripts\Test-Voice.ps1 -Token <code>` runs every phrase in dry-run mode and should end with `0 failed`. With the AI key saved, add `-Live` to test the real AI.
+5. **Check (presses nothing):**
+   - `.\scripts\Test-Logic.ps1` runs the PC tests and needs no TV. Run it before every build.
+   - `.\scripts\Test-Voice.ps1 -Token <code>` runs every phrase in dry-run mode and should end with `0 failed`. It also checks that dry runs leave the conversation memory alone.
+   - With the AI key saved, add `-Live` to test the real AI. Then read `GET /log` to see which model Jev used, the timings and any `outside_pool` or `http=` problems.
+   - **YouTube routes:** the side-menu walk in `Actions.youtubeTab` and the menu check in `YouTubeMenu` were measured on a Sony BRAVIA at 1920x1080, YouTube for Android TV, October 2026. On another TV or YouTube version, measure them again with screenshots before trusting them.
 
 ## Phase 4: the iPhone Shortcut
 1. Walk the person through `docs/SHORTCUT.md` one step at a time. Use `http://<TV-IP>:8765/talk` and their code.

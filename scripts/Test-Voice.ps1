@@ -18,7 +18,13 @@ function Talk([string]$words, [string]$fake) {
     [Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray()) | ConvertFrom-Json
 }
 
-# words, expected first action ('' = none), expected end, canned AI answer (for AI cases)
+function Get-MemorySize {
+    $p = Invoke-WebRequest -UseBasicParsing -Uri "http://${Ip}:8765/ping" -Headers @{ 'X-Token' = $Token } -TimeoutSec 10
+    if ($p.Content -match 'history=(\d+)') { [int]$Matches[1] } else { -1 }
+}
+
+# words, expected first action ('' = none), expected end, canned AI answer (for AI cases),
+# extra check: 'arabic' / 'latin' (search text script) or 'nogoodbye' (the reply must not end the Shortcut)
 $cases = @(
     @('Volume up', 'key', $false, $null),
     @('turn it down a bit', 'key', $false, $null),
@@ -33,8 +39,16 @@ $cases = @(
     @('bye', '', $true, $null),
     @('OK that''s it for now', '', $true, $null),
     @('thanks, turn it down', 'key', $false, $null),
-    @('Play Goodbye by Mariah Carey', 'youtube_play', $false, '{"actions":[{"action":"youtube_play","arg":"Goodbye Mariah Carey","count":0}],"say":"Playing Goodbye by Mariah Carey."}'),
+    @('Play Goodbye by Mariah Carey', 'youtube_play', $false, '{"actions":[{"action":"youtube_play","arg":"Goodbye Mariah Carey","count":0}],"say":"Playing Goodbye by Mariah Carey.","farewell":false}', 'nogoodbye'),
+    @('search for the song Goodbye', '', $false, '{"actions":[],"say":"Which Goodbye song do you mean?","farewell":false}', 'nogoodbye'),
+    @('open YouTube and then settings', '', $false, '{"actions":[{"action":"open_app","arg":"youtube","count":0},{"action":"open_settings","arg":"","count":0}],"say":"Opening YouTube and settings."}'),
+    @('thanks, what''s playing?', '', $false, '{"actions":[],"say":"A cooking video is playing.","farewell":false}', 'nogoodbye'),
+    @('cheers mate, thats all for tonight', '', $true, '{"actions":[],"say":"Enjoy your evening. Goodbye!","farewell":true}'),
     @('Open YouTube', 'open_app', $false, '{"actions":[{"action":"open_app","arg":"youtube","count":0}],"say":"Opening YouTube."}'),
+    @('open YouTube Shorts', 'youtube_tab', $false, '{"actions":[{"action":"youtube_tab","arg":"shorts","count":0}],"say":"Opening YouTube Shorts.","farewell":false}'),
+    @('YouTube home', 'youtube_home', $false, '{"actions":[{"action":"youtube_home","arg":"","count":0}],"say":"Opening YouTube home.","farewell":false}'),
+    @('open YouTube settings', '', $false, '{"actions":[{"action":"youtube_tab","arg":"settings","count":0}],"say":"Opening settings.","farewell":false}'),
+    @('previous video', 'key', $false, '{"actions":[{"action":"key","arg":"previous","count":2}],"say":"Going to the previous video.","farewell":false}'),
     @('Search YouTube for cooking videos', 'youtube_search', $false, '{"actions":[{"action":"youtube_search","arg":"cooking videos","count":0}],"say":"Searching YouTube for cooking videos."}'),
     @('Show my favourite channels on Lionz', 'lionz_live_favourites', $false, '{"actions":[{"action":"lionz_live_favourites","arg":"","count":0}],"say":"Opening your favourite channels."}'),
     @('open YouTube and search football then play the first one', 'youtube_play', $false, '{"actions":[{"action":"open_app","arg":"youtube","count":0},{"action":"youtube_play","arg":"football","count":0}],"say":"Playing football on YouTube."}'),
@@ -63,6 +77,7 @@ $cases = @(
 )
 
 $pass = 0; $fail = 0
+$historyBefore = Get-MemorySize
 foreach ($c in $cases) {
     $words, $want, $wantEnd, $fake, $script = $c
     try {
@@ -74,11 +89,17 @@ foreach ($c in $cases) {
         $arg = if ($r.actions -and $r.actions.Count -gt 0) { [string]$r.actions[-1].arg } else { '' }
         if ($script -eq 'arabic') { $ok = $ok -and ($arg -match '[؀-ۿ]') }
         if ($script -eq 'latin') { $ok = $ok -and ($arg -notmatch '[؀-ۿ]') }
+        if ($script -eq 'nogoodbye') { $ok = $ok -and ($r.say -notmatch '(?i)good\s?bye') }
         if ($script) { $got = "$got [$arg]" }
     } catch { $r = [pscustomobject]@{ say = "ERROR $($_.Exception.Message)" }; $got = '?'; $ok = $false }
     if ($ok) { $pass++ } else { $fail++ }
     $mark = if ($ok) { 'PASS' } else { 'FAIL' }
     '{0}  {1,-48} -> {2,-22} end={3,-5} "{4}"' -f $mark, "'$words'", $got, $r.end, $r.say
 }
+# dry runs must not change what the TV remembers of the real conversation
+$historyAfter = Get-MemorySize
+$same = $historyBefore -eq $historyAfter -and $historyBefore -ge 0
+if ($same) { $pass++ } else { $fail++ }
+'{0}  {1,-48} -> before={2} after={3}' -f $(if ($same) { 'PASS' } else { 'FAIL' }), "'dry runs leave the memory alone'", $historyBefore, $historyAfter
 "`n$pass passed, $fail failed"
 if ($fail) { exit 1 }

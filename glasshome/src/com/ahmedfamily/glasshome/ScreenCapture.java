@@ -48,8 +48,17 @@ public class ScreenCapture extends Service {
         c.startActivity(new Intent(c, Ask.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION));
     }
 
-    /** A JPEG of the screen as base64, or null if capture isn't available. Call off the main thread. */
-    static String jpegBase64() {
+    /** A JPEG of the screen as base64, or null if capture isn't available in time. Call off the main thread. */
+    static String jpegBase64(long timeoutMs) {
+        Bitmap b = grab(timeoutMs);
+        if (b == null) return null;
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        b.compress(Bitmap.CompressFormat.JPEG, 60, out);
+        return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
+    }
+
+    /** The screen as a 960x540 picture (kept in memory only), or null if capture isn't available in time. */
+    static Bitmap grab(long timeoutMs) {
         MediaProjection p = projection;
         if (p == null) return null;
         final ImageReader reader = ImageReader.newInstance(W, H, PixelFormat.RGBA_8888, 2);
@@ -74,10 +83,8 @@ public class ScreenCapture extends Service {
         try {
             vd = p.createVirtualDisplay("voice-screen", W, H, 160, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 reader.getSurface(), null, h);
-            if (!got.await(3, TimeUnit.SECONDS)) return null;
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            shot.get().compress(Bitmap.CompressFormat.JPEG, 60, out);
-            return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
+            if (!got.await(Math.max(200, timeoutMs), TimeUnit.MILLISECONDS)) return null;
+            return shot.get();
         } catch (Exception e) {
             Log.w(TAG, "screen picture failed", e);
             return null;

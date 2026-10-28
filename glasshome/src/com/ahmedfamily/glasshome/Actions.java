@@ -32,6 +32,8 @@ final class Actions {
         LIST.put("youtube_search", "open YouTube search results; arg = what to search for");
         LIST.put("youtube_play", "search YouTube and play the first result; arg = the video or topic");
         LIST.put("youtube_home", "YouTube home page");
+        LIST.put("youtube_tab", "open a YouTube section from its side menu; arg = home, shorts, subscriptions, library, music, "
+            + "gaming, news, podcasts, sport");
         LIST.put("youtube_library", "YouTube library (history, watch later, playlists)");
         LIST.put("youtube_page_down", "scroll down one page in YouTube");
         LIST.put("lionz_live", "Lionz TV: live channels");
@@ -68,7 +70,8 @@ final class Actions {
     /** Actions that press remote keys through Sony IP control, so they need its key. */
     static boolean needsKeys(String action, String arg) {
         if (action.equals("key") && arg.equals("home")) return false;   // goes straight to Glass Home
-        return !action.equals("none") && !action.equals("open_app") && !action.equals("youtube_home")
+        // youtube_home needs them too: it walks YouTube's side menu with arrow keys
+        return !action.equals("none") && !action.equals("open_app")
             && !action.equals("youtube_library") && !action.equals("youtube_search");
     }
 
@@ -87,6 +90,14 @@ final class Actions {
         return "The app";
     }
 
+    /** Actions that press remote keys, so they must not run on a screen that changed while the AI was thinking. */
+    static boolean pressesKeys(String action) {
+        return action.equals("key") || action.equals("seek") || action.equals("youtube_play") || action.equals("youtube_home")
+            || action.equals("youtube_tab")
+            || action.equals("youtube_page_down") || action.startsWith("lionz_");
+    }
+
+
     /** Seconds one Right/Left press jumps, measured per app on this TV. */
     static int seekStep(String pkg) { return LIONZ.equals(pkg) ? 10 : 10; }
 
@@ -95,15 +106,27 @@ final class Actions {
         s.append("You are the voice assistant of a family's Sony Android TV. The user speaks English through Siri. ")
          .append("Reply with ONE JSON object only, no other text:\n")
          .append("{\"actions\": [{\"action\": \"<name>\", \"arg\": \"<text or empty>\", \"count\": <number or 0>}, ...], ")
-         .append("\"say\": \"<one or two short sentences>\"}\n")
+         .append("\"say\": \"<one or two short sentences>\", \"farewell\": <true only when the user is saying goodbye>}\n")
          .append("\"actions\" runs in order, so one request can do several things, e.g. open an app, search, play, then volume. ")
          .append("Use an empty list when nothing should happen.\nAllowed actions:\n");
         for (Map.Entry<String, String> e : LIST.entrySet()) s.append("- ").append(e.getKey()).append(": ").append(e.getValue()).append('\n');
         s.append("How to decide:\n")
-         .append("- Earlier messages are this conversation; use them for \"the next one\", \"go back\", \"again\", \"louder\".\n")
+         .append("- The current screen and the user's current words come first. The conversation so far only explains words like ")
+         .append("\"again\" or \"louder\"; it is never proof of what is on screen now. If the app in front changed since the last ")
+         .append("turn (the user may use the remote), \"this\", \"next\", \"the second one\" and \"go back\" mean the app in front now.\n")
+         .append("- If you can't tell exactly which item the user means, use no actions and ask one short question in \"say\".\n")
+         .append("- A dark rounded pill at the top centre of the picture is the TV's own status banner; ignore it.\n")
          .append("- When a screen picture is attached, read it: what app and page are shown, which item is highlighted ")
          .append("(brighter, bigger or framed). To pick \"the second video\" or an item you can see, move with key ")
          .append("up/down/left/right from the highlighted item, then key ok. Count carefully.\n")
+         .append("- YouTube: \"YouTube home\" or YouTube's main page ALWAYS uses youtube_home, even if the picture seems to show ")
+         .append("Home already. For a YouTube section (Shorts, Subscriptions, Library, Music, Gaming, News, Podcasts, Sport) use ")
+         .append("youtube_tab with that name. On a YouTube page, \"next\" / \"the one on the right\" = key right, \"previous\" = key left, ")
+         .append("\"the row below\" = key down; \"play it\" / \"open it\" = key ok on the highlighted video. While a video plays, ")
+         .append("\"next video\" = key next; \"previous video\" = key previous with count 2 (one press only restarts the video); ")
+         .append("\"start it again\" / \"from the beginning\" = key previous with count 1. \"Play <something>\" (songs, a video, a topic) ")
+         .append("ALWAYS uses youtube_play, which searches and starts the first real video; youtube_search is only for \"search\" / ")
+         .append("\"show me\" / \"find\". \"Skip the ad\" = key ok (YouTube highlights its Skip button).\n")
          .append("- Lionz TV titles: Arabic shows are written in Arabic script; use that spelling in lionz_search.\n")
          .append("- Arabic on YouTube: Siri writes Arabic names in English letters. Write the search arg of youtube_search ")
          .append("and youtube_play in Arabic script when the user asks for Arabic (\"in Arabic\", \"Arabic version\", ")
@@ -111,11 +134,12 @@ final class Actions {
          .append("show, film, reciter or Arabic topic, e.g. \"Amr Diab songs\" -> \"اغاني عمرو دياب\", ")
          .append("\"Bab Al Hara episode 3\" -> \"باب الحارة الحلقة 3\", \"Quran Surah Al Kahf\" -> \"سورة الكهف\". ")
          .append("Keep everything else in English. \"say\" is always English with names in English letters.\n")
-         .append("- If the user says thank you, goodbye or that they are done, use no actions and say a short friendly ")
-         .append("sentence that contains the word \"Goodbye\" (this ends the conversation). Use \"Goodbye\" only then.\n")
+         .append("- If the user says thank you, goodbye or that they are done, use no actions, set \"farewell\" to true and say a ")
+         .append("short friendly sentence that contains the word \"Goodbye\" (this ends the conversation). Otherwise \"farewell\" is false.\n")
          .append("- If the request is unclear, do nothing and ask one short question in \"say\".\n")
          .append("- Never type passwords, never sign in, never buy or subscribe, never open settings; explain instead.\n")
-         .append("\"say\" is spoken aloud by Siri: say what you are doing, e.g. \"Opening Lionz and searching for Loki.\"");
+         .append("\"say\" is spoken aloud by Siri: say what you are doing in one short sentence, e.g. \"Opening Lionz and ")
+         .append("searching for Loki.\" Don't add offers or questions like \"Want me to…?\"; ask only when the request is unclear.");
         return s.toString();
     }
     private final HomeButtonService svc;
@@ -128,6 +152,8 @@ final class Actions {
         if (!LIST.containsKey(action)) return "Unknown action " + action;
         if (action.equals("key") && !KEYS.containsKey(arg)) return "Unknown button " + arg;
         if (action.equals("open_app") && !APPS.containsKey(arg)) return "Unknown app " + arg;
+        if (action.equals("youtube_tab") && !java.util.Arrays.asList(TABS).contains(arg == null ? "" : arg.trim().toLowerCase(java.util.Locale.ROOT)))
+            return "Unknown YouTube section " + arg;
         if ((action.endsWith("_search") || action.equals("youtube_play")) && (arg == null || arg.trim().isEmpty())) return "Nothing to search for";
         if (arg != null && arg.length() > 120) return "Text too long";
         return null;
@@ -150,7 +176,8 @@ final class Actions {
             case "power_on": sony.powerOn(); return;
             case "power_off": sony.powerOff(); return;
             case "open_app": openApp(APPS.get(arg), false); return;
-            case "youtube_home": youtube("https://www.youtube.com/"); return;
+            case "youtube_home": youtubeTab("home"); return;
+            case "youtube_tab": youtubeTab(arg.trim().toLowerCase(java.util.Locale.ROOT)); return;
             case "youtube_library": youtube("https://www.youtube.com/feed/library"); return;
             case "youtube_search": youtube(searchUrl(arg)); return;
             case "youtube_play": youtubePlay(arg); return;
@@ -181,12 +208,100 @@ final class Actions {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
     }
 
+    /**
+     * YouTube's side-menu sections, in menu order, as steps from "Library": Up for negative, Down for positive.
+     * (Search has its own action, and Settings is never opened.)
+     */
+    static final String[] TABS = { "home", "shorts", "subscriptions", "library", "music", "gaming", "news", "podcasts", "sport" };
+    private static final int LIBRARY_INDEX = 3;
+
+    /**
+     * A YouTube section, such as Home. Measured on this TV (28 Oct 2026): no link or relaunch reaches Home while
+     * YouTube is open, and Back follows YouTube's history (one press too many opens "Who's watching", then leaves
+     * YouTube); but the side menu does. The Library link (which works even during a video) gives a known page; Left
+     * opens the menu on "Library"; Up or Down walks to the section (each step opens that page, 11 of 12 to Home);
+     * Right puts the focus on the section's videos.
+     */
+    private void youtubeTab(String tab) throws IOException {
+        youtubeTabReached = false;
+        int steps = java.util.Arrays.asList(TABS).indexOf(tab) - LIBRARY_INDEX;
+        if (!YOUTUBE.equals(svc.currentPackage())) {
+            openApp(YOUTUBE, false);
+            if (!waitPackage(YOUTUBE, 12000)) throw new IOException("YouTube didn't open");
+            pause(3000);
+        }
+        // over a playing video the Library link often opens as a stacked page (measured): leave the video first
+        if (playing(svc)) { sony.press("Return"); pause(2000); }
+        for (int attempt = 0; attempt < 3; attempt++) {
+            youtube("https://www.youtube.com/feed/library");
+            pause(4000);
+            for (int i = 0; i < 2; i++) { sony.press("Left"); pause(700); }
+            Boolean open = libraryMenuOpen();
+            if (open == null) return;   // can't see the screen: don't walk the menu blind
+            if (open) {
+                for (int i = 0; i < Math.abs(steps); i++) { sony.press(steps < 0 ? "Up" : "Down"); pause(800); }
+                pause(1000);
+                sony.press("Right");
+                pause(1500);
+                youtubeTabReached = true;
+                return;
+            }
+            // Library opened as a page over a video: close that page and the video, then try again
+            sony.press("Return"); pause(1500);
+            sony.press("Return"); pause(2000);
+        }
+    }
+
+    /** Set by youtubeTab when the side menu was seen open on Library and walked to the section. */
+    volatile boolean youtubeTabReached;
+
+    /** True / false from a screen picture, or null when no picture can be taken. */
+    private static Boolean libraryMenuOpen() {
+        android.graphics.Bitmap b = ScreenCapture.grab(1500);
+        if (b == null) return null;
+        // the picture is 960x540, half of the 1920x1080 points measured
+        return YouTubeMenu.libraryMenuOpen(brightness(b, YouTubeMenu.BAR_X / 2, YouTubeMenu.BAR_Y / 2),
+            brightness(b, YouTubeMenu.TOP_X / 2, YouTubeMenu.TOP_Y / 2));
+    }
+
+    private static int brightness(android.graphics.Bitmap b, int cx, int cy) {
+        int r = YouTubeMenu.RADIUS / 2, sum = 0, n = 0;
+        for (int x = cx - r; x <= cx + r; x++) {
+            for (int y = cy - r; y <= cy + r; y++) {
+                int p = b.getPixel(x, y);
+                sum += (((p >> 16) & 0xFF) + ((p >> 8) & 0xFF) + (p & 0xFF)) / 3;
+                n++;
+            }
+        }
+        return n == 0 ? 0 : sum / n;
+    }
+
+    /** Looks at a picture of YouTube's results and returns the presses to the first real video, ending with "ok"; null if unsure. */
+    interface Picker { java.util.List<String> keysToFirstVideo(String jpeg); }
+
+    /** Set by Talk so youtube_play can ask the AI which result to pick. */
+    volatile Picker picker;
+
+    /** Set by youtube_play when the AI looked at the results and picked the video (not just a blind OK). */
+    volatile boolean playPicked;
+
+    /**
+     * Measured 28 Oct 2026: after the search link the focus is on the first result, or on the side menu; and the
+     * first result is often a "Sponsored" ad. So a picture of the results goes to the AI, which returns the presses
+     * to the first real video (checked: only arrows, at most 8, ending with OK). Without a picture: the old blind OK.
+     */
     private void youtubePlay(String q) throws IOException {
+        playPicked = false;
         youtube(searchUrl(q));
-        // results take a few seconds; the first result already has focus, so OK plays it
         if (!waitPackage(YOUTUBE, 12000)) throw new IOException("YouTube didn't open");
         pause(4500);
-        sony.press("Confirm");
+        Picker p = picker;
+        String jpeg = p == null ? null : ScreenCapture.jpegBase64(1500);
+        java.util.List<String> keys = jpeg == null ? null : p.keysToFirstVideo(jpeg);
+        if (cancelled) throw new IOException("it was stopped");
+        if (keys == null) { sony.press("Confirm"); return; }
+        for (String k : keys) { sony.press(KEYS.get(k)); pause(500); }
+        playPicked = true;
     }
 
     // ---- Lionz TV ----
@@ -303,8 +418,12 @@ final class Actions {
         return false;
     }
 
+    /** Waits between steps, but stops at once when this job is cancelled. */
+    void settle(long ms) throws IOException { pause(ms); }
+
     private void pause(long ms) throws IOException {
-        SystemClock.sleep(ms);
+        long end = SystemClock.elapsedRealtime() + ms;
+        for (long left; (left = end - SystemClock.elapsedRealtime()) > 0 && !cancelled; ) SystemClock.sleep(Math.min(100, left));
         if (cancelled) throw new IOException("it was stopped");
     }
 }

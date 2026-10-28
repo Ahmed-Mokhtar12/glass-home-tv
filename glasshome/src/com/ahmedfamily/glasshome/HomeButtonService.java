@@ -15,8 +15,9 @@ import android.widget.ImageView;
 
 /**
  * Sends the remote's Home button, and any return to the old launcher, to Glass Home.
- * Its config limits it to window events from the old launcher, Glass Home, Lionz TV and YouTube; it reads no
- * screen content. It also hosts Voice control (VoiceServer), which only runs when switched on in VoiceActivity.
+ * It gets window events from every app (to know which app is in front) and counts focus/selection events
+ * (only how many, per app); it reads no screen content. It also hosts Voice control (VoiceServer), which only
+ * runs when switched on in VoiceActivity.
  *
  * Sony handles the Home key before accessibility services see it, and Android then holds
  * other apps back for up to 5 seconds. So when the old launcher appears, the helper at once
@@ -38,6 +39,8 @@ public class HomeButtonService extends AccessibilityService {
     // which app and screen are in front, from window events (Voice control checks its steps with these)
     private volatile String frontPackage = "", frontClass = "";
     private final Object frontLock = new Object();
+    // how many window / focus events each app has sent; Voice control compares counts to see that something changed
+    private final java.util.HashMap<String, int[]> events = new java.util.HashMap<>();
     private VoiceServer voice;
 
     @Override
@@ -80,14 +83,24 @@ public class HomeButtonService extends AccessibilityService {
     private android.widget.TextView banner;
     private final Runnable hideBanner = new Runnable() { @Override public void run() { removeBanner(); } };
 
-    /** Shows a short status line on the TV. sticky: stays (up to a minute) until the next banner. */
-    void banner(final String text, final boolean sticky) {
+    /** What the banner is telling you; each has its own colour and sign, so you can read it from the sofa. */
+    static final int HEARD = 0, WORKING = 1, DONE = 2, NOT_SURE = 3, FAILED = 4, CHANGED = 5;
+    private static final int[] FILL = { 0xCC10202E, 0xCC0E2A4A, 0xCC0F3322, 0xCC3A2A08, 0xCC3A1010, 0xCC3A2A08 };
+    private static final int[] EDGE = { 0x88FFFFFF, 0xFF5AA9FF, 0xFF6FDC8C, 0xFFFFC04D, 0xFFFF6B6B, 0xFFFFC04D };
+    private static final String[] SIGN = { "", "… ", "✓ ", "? ", "✗ ", "! " };
+
+    /**
+     * Shows a short status line on the TV. Heard and Working stay (up to a minute) until the next banner;
+     * results fade after a few seconds.
+     */
+    void banner(final int state, final String text) {
+        final boolean sticky = state == HEARD || state == WORKING;
         main.post(new Runnable() {
             @Override public void run() {
                 WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+                android.util.DisplayMetrics m = getResources().getDisplayMetrics();
+                float u = Math.max(m.widthPixels, m.heightPixels) / 1920f;
                 if (banner == null) {
-                    android.util.DisplayMetrics m = getResources().getDisplayMetrics();
-                    float u = Math.max(m.widthPixels, m.heightPixels) / 1920f;
                     android.widget.TextView t = new android.widget.TextView(HomeButtonService.this);
                     t.setTextColor(0xFFFFFFFF);
                     t.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, 30 * u);
@@ -95,11 +108,6 @@ public class HomeButtonService extends AccessibilityService {
                     t.setEllipsize(android.text.TextUtils.TruncateAt.END);
                     t.setMaxWidth(Math.round(1400 * u));
                     t.setPadding(Math.round(34 * u), Math.round(14 * u), Math.round(34 * u), Math.round(16 * u));
-                    android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
-                    bg.setColor(0xCC10202E);
-                    bg.setCornerRadius(40 * u);
-                    bg.setStroke(Math.max(1, Math.round(2 * u)), 0x55FFFFFF);
-                    t.setBackground(bg);
                     WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
                         WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
                         WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -111,13 +119,42 @@ public class HomeButtonService extends AccessibilityService {
                     try { wm.addView(t, lp); } catch (RuntimeException e) { return; }
                     banner = t;
                 }
-                banner.setText(text);
-                banner.animate().cancel();
+                int s = Math.max(0, Math.min(state, FILL.length - 1));
+                android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+                bg.setColor(FILL[s]);
+                bg.setCornerRadius(40 * u);
+                bg.setStroke(Math.max(2, Math.round(3 * u)), EDGE[s]);
+                banner.setBackground(bg);
+                banner.setText(SIGN[s] + text);
+                banner.animate().cancel();   // a cancelled fade never runs its end action, so it can't remove this banner
                 banner.setAlpha(1f);
                 main.removeCallbacks(hideBanner);
-                main.postDelayed(hideBanner, sticky ? 60000 : 4500);
+                main.postDelayed(hideBanner, sticky ? 60000 : 5000);
             }
         });
+    }
+
+    /**
+     * Takes the banner off the screen at once (no fade) and waits until that has happened, at most maxMs,
+     * so a screen picture taken right after doesn't show it.
+     */
+    void clearBanner(long maxMs) {
+        final java.util.concurrent.CountDownLatch gone = new java.util.concurrent.CountDownLatch(1);
+        main.post(new Runnable() {
+            @Override public void run() {
+                main.removeCallbacks(hideBanner);
+                android.widget.TextView t = banner;
+                banner = null;
+                if (t != null) {
+                    t.animate().cancel();
+                    try { ((WindowManager) getSystemService(WINDOW_SERVICE)).removeView(t); } catch (RuntimeException ignored) { }
+                }
+                gone.countDown();
+            }
+        });
+        try {
+            if (gone.await(Math.max(0, maxMs), java.util.concurrent.TimeUnit.MILLISECONDS)) SystemClock.sleep(Math.min(80, maxMs));
+        } catch (InterruptedException ignored) { }
     }
 
     private void removeBanner() {
@@ -158,6 +195,34 @@ public class HomeButtonService extends AccessibilityService {
             }
         }
         return true;
+    }
+
+    /** How many window events this app has sent so far (only ever grows). */
+    int windowEvents(String pkg) { synchronized (frontLock) { int[] c = events.get(pkg); return c == null ? 0 : c[0]; } }
+
+    /** How many focus / selection events this app has sent so far (only ever grows). */
+    int focusEvents(String pkg) { synchronized (frontLock) { int[] c = events.get(pkg); return c == null ? 0 : c[1]; } }
+
+    /**
+     * Waits for a window event from this app newer than "since" (a windowEvents count taken before an action),
+     * with the app in front at the end. Proves the screen changed, not which page it changed to.
+     */
+    boolean waitForNewWindow(String pkg, int since, long timeoutMs) {
+        long end = SystemClock.elapsedRealtime() + timeoutMs;
+        synchronized (frontLock) {
+            while (windowEvents(pkg) <= since || !frontPackage.equals(pkg)) {
+                long left = end - SystemClock.elapsedRealtime();
+                if (left <= 0) return false;
+                try { frontLock.wait(left); } catch (InterruptedException e) { return false; }
+            }
+        }
+        return true;
+    }
+
+    private void count(String pkg, int which) {
+        int[] c = events.get(pkg);
+        if (c == null) { c = new int[2]; events.put(pkg, c); }
+        c[which]++;
     }
 
     /** A short touch at a point on the 1920x1080 screen (Lionz TV accepts these). */
@@ -221,9 +286,15 @@ public class HomeButtonService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent e) {
-        if (e.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return;
+        int type = e.getEventType();
         CharSequence pkg = e.getPackageName();
         if (pkg == null) return;
+        if (type == AccessibilityEvent.TYPE_VIEW_FOCUSED || type == AccessibilityEvent.TYPE_VIEW_SELECTED) {
+            // only counted (for the voice log), never used to decide which app is in front
+            synchronized (frontLock) { count(pkg.toString(), 1); frontLock.notifyAll(); }
+            return;
+        }
+        if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return;
         // ignore the invisible screen-capture helper, which only flashes by
         if (e.getClassName() != null && e.getClassName().toString().contains(".")
                 && !e.getClassName().toString().contains("ScreenCapture")
@@ -232,6 +303,7 @@ public class HomeButtonService extends AccessibilityService {
             synchronized (frontLock) {
                 frontPackage = pkg.toString();
                 frontClass = e.getClassName().toString();
+                count(frontPackage, 0);
                 frontLock.notifyAll();
             }
         }
