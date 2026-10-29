@@ -105,9 +105,9 @@ public final class LogicTests {
         String d = log.dump();
         check("stages in order", d.contains("model+1200ms end+2000ms"));
         check("no words when debug is off", !d.contains("\""));
-        String id = log.begin("talk", 2, "my key sk-or-v1-abcdef123456", 0);
+        String id = log.begin("talk", 2, "my key sk-test-not-a-real-key", 0);
         log.note(id, "model", "anthropic/claude-haiku-5.5");
-        check("keys are never kept", !log.dump().contains("sk-or") && log.dump().contains("[key]"));
+        check("keys are never kept", !log.dump().contains("sk-test") && log.dump().contains("[key]"));
         for (int i = 0; i < 250; i++) log.begin("dry", 1, null, i);
         check("keeps at most 200", log.size() == 200);
     }
