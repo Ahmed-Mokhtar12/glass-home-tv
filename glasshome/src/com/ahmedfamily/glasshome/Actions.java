@@ -111,6 +111,11 @@ final class Actions {
          .append("Use an empty list when nothing should happen.\nAllowed actions:\n");
         for (Map.Entry<String, String> e : LIST.entrySet()) s.append("- ").append(e.getKey()).append(": ").append(e.getValue()).append('\n');
         s.append("How to decide:\n")
+         .append("- The user's words come from Siri's speech recognition, which often mishears. Read them by how they sound and ")
+         .append("by what makes sense on a TV: \"you tube\", \"you too\", \"u tube\" = YouTube; \"lions\", \"lines\", \"lion's TV\" = Lionz TV; ")
+         .append("\"shots\", \"shirts\" = Shorts; \"subscription\", \"subs\" = Subscriptions; \"library\" may come as \"liberty\"; ")
+         .append("\"pause\" may come as \"paws\"/\"pose\"; Arabic names come in English letters, often misspelt (\"Amer Diab\", ")
+         .append("\"Omar Diab\" = Amr Diab). Use the most likely meaning; ask one short question only when two meanings are equally likely.\n")
          .append("- The current screen and the user's current words come first. The conversation so far only explains words like ")
          .append("\"again\" or \"louder\"; it is never proof of what is on screen now. If the app in front changed since the last ")
          .append("turn (the user may use the remote), \"this\", \"next\", \"the second one\" and \"go back\" mean the app in front now.\n")

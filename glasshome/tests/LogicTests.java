@@ -50,6 +50,8 @@ public final class LogicTests {
         check("compound goes to the AI", action("open YouTube and turn it up", false, true).equals("ai"));
         check("correction goes to the AI", action("No, I mean YouTube home", false, true).equals("ai"));
         check("put the TV on mute", action("put the TV on mute", false, true).equals("key mute_on"));
+        check("Siri's \"paws\" = pause", action("paws", false, true).equals("key pause"));
+        check("Siri's \"lauder please\" = louder", action("lauder please", false, true).equals("key volume_up"));
     }
 
     private static void endings() {

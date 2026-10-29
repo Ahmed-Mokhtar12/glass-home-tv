@@ -74,7 +74,9 @@ final class FastPath {
 
     /** A step for clear requests, or null. playerInFront: a video app is in front, so seeking makes sense. */
     static Step decide(String words, boolean playerInFront, boolean tvOn) {
-        String w = clean(words);
+        // Siri often writes these instead of what was said
+        String w = clean(words).replace(" paws ", " pause ").replace(" pose ", " pause ").replace(" paused ", " pause ")
+            .replace(" lauder ", " louder ").replace(" mutes ", " mute ");
         int n = w.trim().split(" ").length;
         if (n > 9) return null;                     // long requests are for the AI
         // negations and other settings are for the AI: "don't turn it off", "turn down the brightness"

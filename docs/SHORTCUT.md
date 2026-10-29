@@ -97,3 +97,43 @@ Speak Prompt
 | It never stops | Step 6 must be **If Text contains Goodbye**, with Stop inside the If. |
 | "Something went wrong" | The iPhone can't reach the TV. Is the TV on? Is the iPhone on the same Wi-Fi? Did the TV's IP change? |
 | "I'm still busy with the last request" | A long job is running. Wait a few seconds, or say "cancel". |
+## Optional: let Siri listen longer
+**The problem:** "Ask for Input" stops listening after a short pause, about 4–5 seconds.
+
+**The fix:** "Dictate Text" has a **Stop Listening** option:
+- **After Pause** waits longer for you to start and to finish.
+- **On Tap** listens until you tap, so it isn't hands-free.
+
+iOS has no setting for an exact 10 seconds.
+
+Change only the inside of the Repeat. Keep a copy first: long-press the Shortcut, then **Duplicate**.
+1. **Remove "Ask for Input":** in the Repeat, tap the ✕ on **Ask for Input**.
+2. **Add Speak Text:** in the same place, add **Speak Text**, with Text = the **Prompt** variable. Siri says "Tell me" or the TV's answer.
+3. **Add Dictate Text:** under it, add **Dictate Text**. Tap the arrow to show more:
+   - **Language:** the same English as your Siri, for example English (United States).
+   - **Stop Listening:** **After Pause**.
+4. **Point the TV request at it:** in **Get Contents of URL** → Request Body → File, tap **Provided Input** → **Select Variable** → **Dictated Text**.
+5. **Leave the rest as it is:** Get Dictionary Value, Set Variable, Text, If… Goodbye, and Speak after End Repeat.
+
+The loop now looks like this:
+```
+Repeat 20 times
+    Speak Text (Prompt)
+    Dictate Text (After Pause)
+    Get contents of http://<TV-IP>:8765/talk   (POST, X-Token, File = Dictated Text)
+    Get Value for "say" in Contents of URL
+    Set variable Prompt to Dictionary Value
+    Text (Prompt)
+    If Text contains "Goodbye"
+        Speak Text
+        Stop this shortcut
+    Otherwise
+    End If
+End Repeat
+Speak Prompt
+```
+**Test it:** say "Hey Siri, TV", wait 3 seconds, then speak slowly.
+
+**If it doesn't work** (for example on a locked iPhone): use the duplicate you kept and delete the changed one.
+
+**If Siri mishears you:** that's fine most of the time. Since 2.7 the TV reads Siri's words by how they sound: "you too" means YouTube, "lions" means Lionz TV, "a mere diab" means Amr Diab, and "paws" means pause.
